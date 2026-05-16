@@ -1,0 +1,88 @@
+const express = require("express");
+const cors = require("cors");
+const bodyParser = require("body-parser");
+const fetch = require("node-fetch");
+const { OpenAI } = require("openai");
+
+const app = express();
+app.use(cors());
+app.use(bodyParser.json());
+
+// 🔑 OpenAI
+const client = new OpenAI({
+  apiKey: "你的APIKEY"
+});
+
+// 🔑 Bing Search API Key（必填）
+const BING_KEY = "你的BING_API_KEY";
+
+// 🌐 真網頁搜尋
+async function searchWeb(query){
+  let url = `https://api.bing.microsoft.com/v7.0/search?q=${encodeURIComponent(query)}`;
+
+  let res = await fetch(url, {
+    headers: {
+      "Ocp-Apim-Subscription-Key": BING_KEY
+    }
+  });
+
+  let data = await res.json();
+
+  let results = data.webPages?.value || [];
+
+  return results.slice(0, 3).map(r =>
+    `標題: ${r.name}\n內容: ${r.snippet}\n網址: ${r.url}`
+  ).join("\n\n");
+}
+
+// 🧠 記憶
+let memory = {
+  name: null,
+  history: []
+};
+
+app.post("/chat", async (req, res) => {
+  let msg = req.body.message;
+
+  // 記名字
+  if(msg.includes("我叫")){
+    memory.name = msg.replace("我叫","").trim();
+    return res.json({ reply: `好的，我記住你叫 ${memory.name}` });
+  }
+
+  // 🌐 搜尋判斷
+  let searchResult = "";
+  if(msg.includes("搜尋") || msg.includes("查") || msg.includes("網頁")){
+    searchResult = await searchWeb(msg);
+  }
+
+  memory.history.push({ role: "user", content: msg });
+  if(memory.history.length > 10) memory.history.shift();
+
+  const ai = await client.chat.completions.create({
+    model: "gpt-4o-mini",
+    messages: [
+      {
+        role: "system",
+        content: `
+你是一個AI助手。
+使用者名稱：${memory.name || "未知"}
+
+以下是網頁搜尋結果：
+${searchResult}
+        `
+      },
+      ...memory.history
+    ]
+  });
+
+  let reply = ai.choices[0].message.content;
+
+  memory.history.push({ role: "assistant", content: reply });
+
+  res.json({ reply });
+});
+
+app.listen(3000, () => {
+  console.log("AI + 網頁搜尋啟動中");
+});
